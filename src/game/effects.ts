@@ -97,7 +97,7 @@ export function updateHUD() {
   }
   if (state.ui.hudItem) {
     state.ui.hudItem.textContent = state.inventory.held
-      ? formatItemLabel(state.inventory.held)
+      ? `${formatItemLabel(state.inventory.held)} (Q)`
       : 'None'
   }
   if (state.ui.hudShield) {

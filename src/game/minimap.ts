@@ -46,22 +46,9 @@ export function updateMinimap() {
     )
   }
 
-  levelState.rooms.forEach((room) => {
-    if (!room.tag) return
-    if (!levelState.discovered[room.centerCell.y][room.centerCell.x]) return
-    minimapCtx.fillStyle =
-      room.tag === 'treasure' ? '#d38cff' : room.tag === 'trap' ? '#ff6b5b' : '#ffc36e'
-    minimapCtx.fillRect(
-      room.centerCell.x * cellSizePx - 2,
-      room.centerCell.y * cellSizePx - 2,
-      4,
-      4
-    )
-  })
-
   state.doors.forEach((door) => {
     if (!levelState.discovered[door.cell.y][door.cell.x]) return
-    minimapCtx.fillStyle = door.kind === 'exit' ? '#4fd4ff' : '#f5d76e'
+    minimapCtx.fillStyle = door.kind === 'exit' ? '#f5d76e' : '#d38cff'
     minimapCtx.fillRect(
       door.cell.x * cellSizePx - 2,
       door.cell.y * cellSizePx - 2,

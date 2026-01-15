@@ -23,7 +23,7 @@ export function createLevelState(): LevelState {
   const startRoom = data.rooms[0]
   const keyCell = pickKeyCell(data.rooms, startRoom, data.exitRoom, data.grid, rng)
   const keyRoom = findRoomForCell(data.rooms, keyCell)
-  assignRoomTags(data.rooms, startRoom, data.exitRoom, keyRoom, rng)
+  assignRoomTags(data.rooms, startRoom, data.exitRoom, keyRoom, data.grid, rng)
   const treasureRoom = data.rooms.find((room) => room.tag === 'treasure') ?? null
   const enemySpawns = generateEnemySpawns(
     data.rooms,
@@ -240,7 +240,7 @@ export function updateTreasurePickup() {
       }
       state.inventory.held = pickup.type
       if (itemNotice) {
-        itemNotice.textContent = `Picked up: ${formatConsumableLabel(pickup.type)}`
+        itemNotice.textContent = `Picked up: ${formatConsumableLabel(pickup.type)} (Press Q)`
         itemNotice.style.display = 'block'
         setTimeout(() => {
           if (itemNotice) itemNotice.style.display = 'none'
@@ -270,6 +270,8 @@ export function updateLeverInteraction() {
         if (leverNotice) leverNotice.style.display = 'none'
       }, 1400)
     }
+    const light = lever.mesh.userData.light as THREE.PointLight | undefined
+    if (light) state.scene?.remove(light)
     state.scene?.remove(lever.mesh)
     state.lever = null
   }
@@ -451,19 +453,46 @@ function removeDoor(index: number) {
 
 function spawnDoors(levelState: LevelState) {
   clearDoors()
+
+  const startCell = levelState.startRoom.centerCell
+  const requiredCells: GridPoint[] = [levelState.keyCell, levelState.leverCell]
+  if (levelState.treasureSpawn) requiredCells.push(levelState.treasureSpawn.cell)
+
   const exitEntrances = findRoomEntrances(levelState.exitRoom, levelState.grid)
-  exitEntrances.forEach((cell) => createDoor(cell, 'exit'))
+  const exitDoorCell = pickDoorCell(
+    exitEntrances,
+    levelState.grid,
+    startCell,
+    requiredCells
+  )
+
+  if (exitDoorCell) {
+    createDoor(exitDoorCell, 'exit')
+  } else {
+    createDoor(levelState.exitRoom.centerCell, 'exit')
+  }
 
   const treasureRoom = levelState.rooms.find((room) => room.tag === 'treasure')
-  if (!treasureRoom) return
+  if (!treasureRoom || !levelState.treasureSpawn) return
+
   const treasureEntrances = findRoomEntrances(treasureRoom, levelState.grid)
-  treasureEntrances.forEach((cell) => createDoor(cell, 'treasure'))
+  const treasureDoorCell = pickTreasureDoorCell(
+    treasureEntrances,
+    levelState.grid,
+    startCell,
+    levelState.leverCell,
+    levelState.treasureSpawn.cell
+  )
+
+  if (treasureDoorCell) {
+    createDoor(treasureDoorCell, 'treasure')
+  }
 }
 
 function createDoor(cell: GridPoint, kind: DoorKind) {
   const material = new THREE.MeshStandardMaterial({
-    color: kind === 'exit' ? 0x4fd4ff : 0xf5d76e,
-    emissive: kind === 'exit' ? 0x1a5d74 : 0x7c5b1a,
+    color: kind === 'exit' ? 0xf5d76e : 0xd38cff,
+    emissive: kind === 'exit' ? 0xffd66b : 0x5f2a88,
     emissiveIntensity: 0.35,
   })
   const mesh = new THREE.Mesh(
@@ -486,6 +515,8 @@ function createDoor(cell: GridPoint, kind: DoorKind) {
 
 function clearLever() {
   if (state.lever) {
+    const light = state.lever.mesh.userData.light as THREE.PointLight | undefined
+    if (light) state.scene?.remove(light)
     state.scene?.remove(state.lever.mesh)
   }
   state.lever = null
@@ -495,16 +526,22 @@ function spawnLever(levelState: LevelState) {
   clearLever()
   if (levelState.leverActivated) return
 
-  const geometry = new THREE.CylinderGeometry(0.12, 0.2, 0.9, 10)
+  const geometry = new THREE.CylinderGeometry(0.18, 0.28, 1.2, 10)
   const material = new THREE.MeshStandardMaterial({
     color: 0x8bf7ff,
     emissive: 0x1f6a75,
-    emissiveIntensity: 0.5,
+    emissiveIntensity: 0.8,
   })
   const mesh = new THREE.Mesh(geometry, material)
   const worldPos = gridToWorld(levelState.leverCell.x, levelState.leverCell.y)
-  mesh.position.set(worldPos.x, 0.6, worldPos.z)
+  mesh.position.set(worldPos.x, 0.65, worldPos.z)
   state.scene?.add(mesh)
+
+  const light = new THREE.PointLight(0x8bf7ff, 1.0, 10)
+  light.position.set(worldPos.x, 2.2, worldPos.z)
+  state.scene?.add(light)
+  mesh.userData.light = light
+
   state.lever = { mesh, cell: levelState.leverCell, isActivated: false }
 }
 
@@ -801,7 +838,8 @@ function pickKeyCell(
   const farRooms = candidates.filter(
     (room) => manhattan(room.centerCell, start.centerCell) >= 8
   )
-  const keyRoom = pickRandomRoom(farRooms, rng) ?? pickRandomRoom(candidates, rng) ?? exit
+  const keyRoom =
+    pickRandomRoom(farRooms, rng) ?? pickRandomRoom(candidates, rng) ?? start
   return (
     getRandomFloorCellInRoomWithRng(keyRoom, 4, start.centerCell, gridSource, rng) ||
     keyRoom.centerCell
@@ -944,6 +982,7 @@ function assignRoomTags(
   start: Room,
   exit: Room,
   keyRoom: Room | null,
+  gridSource: number[][],
   rng: Rng
 ) {
   rooms.forEach((room) => {
@@ -960,7 +999,10 @@ function assignRoomTags(
       manhattan(b.centerCell, start.centerCell) - manhattan(a.centerCell, start.centerCell)
   )
 
-  const treasureRoom = pickRoomFromTop(sorted, rng)
+  const leafCandidates = sorted.filter(
+    (room) => findRoomEntrances(room, gridSource).length <= 1
+  )
+  const treasureRoom = pickRoomFromTop(leafCandidates.length > 0 ? leafCandidates : sorted, rng)
   if (treasureRoom) treasureRoom.tag = 'treasure'
 
   const remaining = sorted.filter((room) => room !== treasureRoom)
@@ -984,7 +1026,7 @@ function pickLeverCell(
     (room) => room !== start && room !== exit && room !== keyRoom && room !== treasureRoom
   )
 
-  let chosen = candidates[0] ?? treasureRoom ?? start
+  let chosen = candidates[0] ?? start
   if (treasureRoom && candidates.length > 0) {
     chosen = candidates.reduce((best, room) =>
       manhattan(room.centerCell, treasureRoom.centerCell) >
@@ -1120,6 +1162,92 @@ function formatConsumableLabel(type: ConsumableType) {
       return 'Item'
   }
 }
+
+function pickDoorCell(
+  candidates: GridPoint[],
+  gridSource: number[][],
+  startCell: GridPoint,
+  requiredReachable: GridPoint[]
+) {
+  const filtered = candidates.filter((cell) =>
+    canReachAllCells(gridSource, startCell, requiredReachable, new Set([cellKey(cell)]))
+  )
+  if (filtered.length === 0) return null
+  return filtered[0]
+}
+
+function pickTreasureDoorCell(
+  candidates: GridPoint[],
+  gridSource: number[][],
+  startCell: GridPoint,
+  leverCell: GridPoint,
+  treasureCell: GridPoint
+) {
+  for (const candidate of candidates) {
+    const blocked = new Set([cellKey(candidate)])
+    const reachable = floodFillReachable(gridSource, startCell, blocked)
+    if (!reachable.has(cellKey(leverCell))) continue
+    if (reachable.has(cellKey(treasureCell))) continue
+    return candidate
+  }
+  return null
+}
+
+function canReachAllCells(
+  gridSource: number[][],
+  startCell: GridPoint,
+  targets: GridPoint[],
+  blocked: Set<string>
+) {
+  const reachable = floodFillReachable(gridSource, startCell, blocked)
+  for (const target of targets) {
+    if (!reachable.has(cellKey(target))) return false
+  }
+  return true
+}
+
+function floodFillReachable(
+  gridSource: number[][],
+  startCell: GridPoint,
+  blocked: Set<string>
+) {
+  const visited = new Set<string>()
+  const queue: GridPoint[] = [startCell]
+  visited.add(cellKey(startCell))
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    const neighbors = [
+      { x: current.x - 1, y: current.y },
+      { x: current.x + 1, y: current.y },
+      { x: current.x, y: current.y - 1 },
+      { x: current.x, y: current.y + 1 },
+    ]
+
+    for (const neighbor of neighbors) {
+      if (
+        neighbor.x < 0 ||
+        neighbor.y < 0 ||
+        neighbor.x >= config.gridWidth ||
+        neighbor.y >= config.gridHeight
+      ) {
+        continue
+      }
+      if (gridSource[neighbor.y][neighbor.x] !== 0) continue
+      const key = cellKey(neighbor)
+      if (blocked.has(key) || visited.has(key)) continue
+      visited.add(key)
+      queue.push(neighbor)
+    }
+  }
+
+  return visited
+}
+
+function cellKey(cell: GridPoint) {
+  return `${cell.x},${cell.y}`
+}
+
 
 function getTreasureColor(type: ConsumableType) {
   switch (type) {
