@@ -317,6 +317,16 @@ export function useHeldItem() {
 
   switch (held) {
     case 'medkit':
+      if (state.player.health >= 100) {
+        if (itemNotice) {
+          itemNotice.textContent = 'Medkit cannot be used: health is full'
+          itemNotice.style.display = 'block'
+          setTimeout(() => {
+            if (itemNotice) itemNotice.style.display = 'none'
+          }, 1200)
+        }
+        return
+      }
       state.player.health = Math.min(100, state.player.health + 40)
       if (itemNotice) {
         itemNotice.textContent = 'Medkit used: +40 HP'
