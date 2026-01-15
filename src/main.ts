@@ -7,9 +7,12 @@ import {
   checkPortal,
   initLevel,
   updateDiscovery,
+  updateDoorInteractions,
   updateGameOver,
   updateKeyPickup,
+  updateLeverInteraction,
   updatePotionPickup,
+  updateTreasurePickup,
 } from './game/level'
 import { updateMinimap } from './game/minimap'
 import { initMaterials } from './game/materials'
@@ -25,6 +28,8 @@ hud.innerHTML = `
   <div>Score: <span id="score">0</span></div>
   <div>Health: <span id="health">100</span></div>
   <div>Enemies: <span id="enemies">0</span></div>
+  <div>Item: <span id="item">None</span></div>
+  <div>Shield: <span id="shield">0</span></div>
 `
 
 const overlay = document.createElement('div')
@@ -47,6 +52,11 @@ portalHint.id = 'portal-hint'
 portalHint.textContent = 'Defeat all enemies to activate the portal'
 portalHint.style.display = 'none'
 
+const doorHint = document.createElement('div')
+doorHint.id = 'door-hint'
+doorHint.textContent = 'Door locked'
+doorHint.style.display = 'none'
+
 const keyNotice = document.createElement('div')
 keyNotice.id = 'key-notice'
 keyNotice.textContent = 'Key found'
@@ -56,6 +66,16 @@ const potionNotice = document.createElement('div')
 potionNotice.id = 'potion-notice'
 potionNotice.textContent = '+25 HP'
 potionNotice.style.display = 'none'
+
+const itemNotice = document.createElement('div')
+itemNotice.id = 'item-notice'
+itemNotice.textContent = 'Picked up: Medkit'
+itemNotice.style.display = 'none'
+
+const leverNotice = document.createElement('div')
+leverNotice.id = 'lever-notice'
+leverNotice.textContent = 'Switch activated'
+leverNotice.style.display = 'none'
 
 const minimap = document.createElement('canvas')
 minimap.id = 'minimap'
@@ -92,8 +112,11 @@ app.append(
   overlay,
   levelModal,
   portalHint,
+  doorHint,
   keyNotice,
   potionNotice,
+  itemNotice,
+  leverNotice,
   minimap,
   hitmarker,
   crosshair,
@@ -140,11 +163,16 @@ state.ui.hudLevel = hud.querySelector<HTMLSpanElement>('#level')
 state.ui.hudScore = hud.querySelector<HTMLSpanElement>('#score')
 state.ui.hudHealth = hud.querySelector<HTMLSpanElement>('#health')
 state.ui.hudEnemies = hud.querySelector<HTMLSpanElement>('#enemies')
+state.ui.hudItem = hud.querySelector<HTMLSpanElement>('#item')
+state.ui.hudShield = hud.querySelector<HTMLSpanElement>('#shield')
 state.ui.overlay = overlay
 state.ui.levelModal = levelModal
 state.ui.portalHint = portalHint
+state.ui.doorHint = doorHint
 state.ui.keyNotice = keyNotice
 state.ui.potionNotice = potionNotice
+state.ui.itemNotice = itemNotice
+state.ui.leverNotice = leverNotice
 state.ui.crosshair = crosshair
 state.ui.hitmarker = hitmarker
 state.ui.damageVignette = damageVignette
@@ -173,6 +201,9 @@ function animate(time: number) {
   handleBulletHits()
   updateKeyPickup()
   updatePotionPickup()
+  updateTreasurePickup()
+  updateLeverInteraction()
+  updateDoorInteractions()
   updateDiscovery()
   updateMinimap()
   updateEffects(delta, time)

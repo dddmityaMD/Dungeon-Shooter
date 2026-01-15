@@ -46,6 +46,56 @@ export function updateMinimap() {
     )
   }
 
+  levelState.rooms.forEach((room) => {
+    if (!room.tag) return
+    if (!levelState.discovered[room.centerCell.y][room.centerCell.x]) return
+    minimapCtx.fillStyle =
+      room.tag === 'treasure' ? '#d38cff' : room.tag === 'trap' ? '#ff6b5b' : '#ffc36e'
+    minimapCtx.fillRect(
+      room.centerCell.x * cellSizePx - 2,
+      room.centerCell.y * cellSizePx - 2,
+      4,
+      4
+    )
+  })
+
+  state.doors.forEach((door) => {
+    if (!levelState.discovered[door.cell.y][door.cell.x]) return
+    minimapCtx.fillStyle = door.kind === 'exit' ? '#4fd4ff' : '#f5d76e'
+    minimapCtx.fillRect(
+      door.cell.x * cellSizePx - 2,
+      door.cell.y * cellSizePx - 2,
+      4,
+      4
+    )
+  })
+
+  if (state.lever && levelState.discovered[state.lever.cell.y][state.lever.cell.x]) {
+    minimapCtx.fillStyle = '#8bf7ff'
+    minimapCtx.fillRect(
+      state.lever.cell.x * cellSizePx - 2,
+      state.lever.cell.y * cellSizePx - 2,
+      4,
+      4
+    )
+  }
+
+  state.treasurePickups.forEach((pickup) => {
+    if (!levelState.discovered[pickup.cell.y][pickup.cell.x]) return
+    minimapCtx.fillStyle =
+      pickup.type === 'medkit'
+        ? '#63ff9a'
+        : pickup.type === 'shield'
+          ? '#63c7ff'
+          : '#d38cff'
+    minimapCtx.fillRect(
+      pickup.cell.x * cellSizePx - 2,
+      pickup.cell.y * cellSizePx - 2,
+      4,
+      4
+    )
+  })
+
   state.potions.forEach((potion) => {
     if (!levelState.discovered[potion.cell.y][potion.cell.x]) return
     minimapCtx.fillStyle = '#63ff9a'

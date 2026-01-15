@@ -3,7 +3,7 @@ import { state } from './state'
 import type { WallAabb } from './state'
 
 export function resolveCollisions(position: THREE.Vector3, radius: number) {
-  const colliders = state.wallAabbs.concat(state.propColliders)
+  const colliders = state.wallAabbs.concat(state.propColliders, state.doorColliders)
   for (const wall of colliders) {
     const closestX = Math.max(wall.minX, Math.min(wall.maxX, position.x))
     const closestZ = Math.max(wall.minZ, Math.min(wall.maxZ, position.z))
@@ -21,7 +21,7 @@ export function resolveCollisions(position: THREE.Vector3, radius: number) {
 }
 
 export function isPointInsideObstacle(position: THREE.Vector3) {
-  const colliders = state.wallAabbs.concat(state.propColliders)
+  const colliders = state.wallAabbs.concat(state.propColliders, state.doorColliders)
   for (const wall of colliders) {
     if (
       position.x >= wall.minX &&

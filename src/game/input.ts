@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { initAudio } from './audio'
 import { resolveCollisions } from './collision'
 import { fireBullet } from './combat'
-import { fadeIn, fadeOut, nextLevel, resetGame } from './level'
+import { fadeIn, fadeOut, nextLevel, resetGame, useHeldItem } from './level'
 import { state } from './state'
 
 export function setupInputHandlers() {
@@ -62,6 +62,9 @@ export function setupInputHandlers() {
 
   window.addEventListener('keydown', (event) => {
     state.controls.keys.add(event.code)
+    if (event.code === 'KeyQ' && state.controls.isActive && !event.repeat) {
+      useHeldItem()
+    }
   })
 
   window.addEventListener('keyup', (event) => {

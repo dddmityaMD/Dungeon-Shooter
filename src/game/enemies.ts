@@ -5,7 +5,7 @@ import { triggerDamageFeedback } from './effects'
 import { resolveCollisions } from './collision'
 import { gridToWorld, worldToGrid } from './grid'
 import { config, state, type Enemy, type EnemyType, EnemyState, type GridPoint, type SpawnInfo } from './state'
-import { spawnEnemyProjectile } from './combat'
+import { applyPlayerDamage, spawnEnemyProjectile } from './combat'
 
 const enemyLoader = new GLTFLoader()
 
@@ -92,7 +92,7 @@ export function updateEnemies(delta: number, time: number) {
       }
 
       if (distanceToPlayer < 1.2) {
-        state.player.health = Math.max(0, state.player.health - 30 * delta)
+        applyPlayerDamage(30 * delta)
         triggerDamageFeedback()
       }
 
@@ -221,7 +221,7 @@ export function updateEnemies(delta: number, time: number) {
     }
 
     if (distanceToPlayer < 1.2) {
-      state.player.health = Math.max(0, state.player.health - 30 * delta)
+      applyPlayerDamage(30 * delta)
       triggerDamageFeedback()
     }
 

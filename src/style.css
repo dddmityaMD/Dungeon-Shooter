@@ -29,6 +29,7 @@ canvas {
   top: 16px;
   left: 16px;
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 10px 14px;
   background: rgba(8, 10, 18, 0.65);
@@ -101,6 +102,20 @@ canvas {
   z-index: 3;
 }
 
+#door-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 140px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  background: rgba(9, 12, 20, 0.8);
+  border: 1px solid #f5d76e;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #f5d76e;
+  z-index: 3;
+}
+
 #key-notice {
   position: absolute;
   left: 50%;
@@ -126,6 +141,34 @@ canvas {
   border-radius: 6px;
   font-size: 13px;
   color: #63ff9a;
+  z-index: 3;
+}
+
+#item-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 172px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  background: rgba(9, 12, 20, 0.8);
+  border: 1px solid #d38cff;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #d38cff;
+  z-index: 3;
+}
+
+#lever-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 204px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  background: rgba(9, 12, 20, 0.8);
+  border: 1px solid #8bf7ff;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #8bf7ff;
   z-index: 3;
 }
 

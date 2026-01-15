@@ -7,6 +7,18 @@ import { damageProp, getPropHitIndex } from './props'
 
 const hitRaycaster = new THREE.Raycaster()
 
+export function applyPlayerDamage(amount: number) {
+  let remaining = amount
+  if (state.player.shield > 0) {
+    const absorbed = Math.min(state.player.shield, remaining)
+    state.player.shield -= absorbed
+    remaining -= absorbed
+  }
+  if (remaining > 0) {
+    state.player.health = Math.max(0, state.player.health - remaining)
+  }
+}
+
 export function fireBullet() {
   const camera = state.camera
   const bulletGeo = state.geometry.bulletGeo
@@ -88,7 +100,7 @@ export function updateEnemyProjectiles(delta: number) {
     projectile.age += delta
 
     const hitObstacle = state.wallAabbs
-      .concat(state.propColliders)
+      .concat(state.propColliders, state.doorColliders)
       .some((wall) =>
         segmentAabbIntersect(projectile.prev, projectile.mesh.position, wall)
       )
@@ -106,7 +118,7 @@ export function updateEnemyProjectiles(delta: number) {
       0.9
     )
     if (playerHit) {
-      state.player.health = Math.max(0, state.player.health - 20)
+      applyPlayerDamage(20)
       triggerDamageFeedback()
       state.scene?.remove(projectile.mesh)
       state.enemyProjectiles.splice(i, 1)

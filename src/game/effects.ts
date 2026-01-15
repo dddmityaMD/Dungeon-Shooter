@@ -62,7 +62,7 @@ export function updateEffects(delta: number, time: number) {
   }
 
   state.torchLights.forEach((light, index) => {
-    const base = 1.1
+    const base = (light.userData.baseIntensity as number | undefined) ?? 1.1
     const flicker =
       Math.sin(time * 0.005 + index) * 0.12 +
       Math.sin(time * 0.011 + index * 1.7) * 0.08
@@ -95,4 +95,16 @@ export function updateHUD() {
   if (state.ui.hudEnemies) {
     state.ui.hudEnemies.textContent = `${state.remainingEnemies}`
   }
+  if (state.ui.hudItem) {
+    state.ui.hudItem.textContent = state.inventory.held
+      ? formatItemLabel(state.inventory.held)
+      : 'None'
+  }
+  if (state.ui.hudShield) {
+    state.ui.hudShield.textContent = `${Math.max(0, Math.round(state.player.shield))}`
+  }
+}
+
+function formatItemLabel(label: string) {
+  return label.charAt(0).toUpperCase() + label.slice(1)
 }

@@ -42,26 +42,24 @@ export enum EnemyState {
   SEARCH = 'search',
 }
 
+export type RoomTag = 'treasure' | 'armory' | 'trap'
+
+export interface Room {
+  id: number
+  x: number
+  y: number
+  w: number
+  h: number
+  centerX: number
+  centerZ: number
+  centerCell: GridPoint
+  tag?: RoomTag
+}
+
 export interface LevelData {
   grid: number[][]
-  rooms: {
-    x: number
-    y: number
-    w: number
-    h: number
-    centerX: number
-    centerZ: number
-    centerCell: GridPoint
-  }[]
-  exitRoom: {
-    x: number
-    y: number
-    w: number
-    h: number
-    centerX: number
-    centerZ: number
-    centerCell: GridPoint
-  }
+  rooms: Room[]
+  exitRoom: Room
 }
 
 export interface SpawnInfo {
@@ -69,12 +67,24 @@ export interface SpawnInfo {
   type: string
 }
 
+export type DoorKind = 'exit' | 'treasure'
+export type ConsumableType = 'medkit' | 'shield' | 'scanner'
+
+export interface TreasureSpawn {
+  cell: GridPoint
+  type: ConsumableType
+}
+
 export interface LevelState extends LevelData {
-  startRoom: LevelData['rooms'][number]
+  startRoom: Room
   keyCell: GridPoint
   enemySpawns: SpawnInfo[]
   propSpawns: SpawnInfo[]
   potionSpawns: SpawnInfo[]
+  treasureSpawn: TreasureSpawn | null
+  leverCell: GridPoint
+  leverActivated: boolean
+  seed: number
   discovered: boolean[][]
   hasKey: boolean
   keyDiscovered: boolean
@@ -90,6 +100,26 @@ export interface Prop {
 export interface Potion {
   mesh: THREE.Mesh
   cell: GridPoint
+}
+
+export interface TreasurePickup {
+  mesh: THREE.Mesh
+  cell: GridPoint
+  type: ConsumableType
+}
+
+export interface Door {
+  mesh: THREE.Mesh
+  collider: WallAabb
+  cell: GridPoint
+  kind: DoorKind
+  isLocked: boolean
+}
+
+export interface Lever {
+  mesh: THREE.Mesh
+  cell: GridPoint
+  isActivated: boolean
 }
 
 export interface EnemyProjectile {
@@ -126,17 +156,25 @@ export const state = {
   discovered: [] as boolean[][],
   wallAabbs: [] as WallAabb[],
   propColliders: [] as WallAabb[],
+  doorColliders: [] as WallAabb[],
   bullets: [] as THREE.Mesh[],
   enemyProjectiles: [] as EnemyProjectile[],
   enemies: [] as Enemy[],
   props: [] as Prop[],
   potions: [] as Potion[],
+  treasurePickups: [] as TreasurePickup[],
+  doors: [] as Door[],
+  lever: null as Lever | null,
   tracers: [] as { line: THREE.Line; life: number }[],
   muzzleFlash: null as THREE.PointLight | null,
   torchLights: [] as THREE.PointLight[],
   player: {
     health: 100,
+    shield: 0,
     score: 0,
+  },
+  inventory: {
+    held: null as ConsumableType | null,
   },
   timers: {
     lastShot: 0,
@@ -167,11 +205,16 @@ export const state = {
     hudScore: null as HTMLSpanElement | null,
     hudHealth: null as HTMLSpanElement | null,
     hudEnemies: null as HTMLSpanElement | null,
+    hudItem: null as HTMLSpanElement | null,
+    hudShield: null as HTMLSpanElement | null,
     overlay: null as HTMLDivElement | null,
     levelModal: null as HTMLDivElement | null,
     portalHint: null as HTMLDivElement | null,
+    doorHint: null as HTMLDivElement | null,
     keyNotice: null as HTMLDivElement | null,
     potionNotice: null as HTMLDivElement | null,
+    itemNotice: null as HTMLDivElement | null,
+    leverNotice: null as HTMLDivElement | null,
     crosshair: null as HTMLDivElement | null,
     hitmarker: null as HTMLDivElement | null,
     damageVignette: null as HTMLDivElement | null,

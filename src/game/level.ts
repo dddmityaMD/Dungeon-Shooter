@@ -1,33 +1,64 @@
 import * as THREE from 'three'
-import { config, state, type GridPoint, type LevelData, type LevelState, type SpawnInfo } from './state'
-import { createDiscoveryGrid, getRandomFloorCellInRoom, gridToWorld, manhattan, worldToGrid } from './grid'
+import {
+  config,
+  state,
+  type ConsumableType,
+  type DoorKind,
+  type GridPoint,
+  type LevelData,
+  type LevelState,
+  type Room,
+  type RoomTag,
+  type SpawnInfo,
+} from './state'
+import { createDiscoveryGrid, gridToWorld, manhattan, worldToGrid } from './grid'
 import { resetCombat } from './combat'
 import { spawnProps } from './props'
 import { spawnEnemies } from './enemies'
 
 export function createLevelState(): LevelState {
-  const data = generateDungeon(config.gridWidth, config.gridHeight)
+  const seed = Math.floor(Math.random() * 1_000_000_000)
+  const rng = createRng(seed)
+  const data = generateDungeon(config.gridWidth, config.gridHeight, rng)
   const startRoom = data.rooms[0]
-  const keyCell = pickKeyCell(data.rooms, startRoom, data.exitRoom, data.grid)
+  const keyCell = pickKeyCell(data.rooms, startRoom, data.exitRoom, data.grid, rng)
+  const keyRoom = findRoomForCell(data.rooms, keyCell)
+  assignRoomTags(data.rooms, startRoom, data.exitRoom, keyRoom, rng)
+  const treasureRoom = data.rooms.find((room) => room.tag === 'treasure') ?? null
   const enemySpawns = generateEnemySpawns(
     data.rooms,
     startRoom.centerCell,
     10,
-    data.grid
+    data.grid,
+    rng
   )
   const propSpawns = generatePropSpawns(
     data.rooms,
     startRoom,
     data.exitRoom,
-    data.grid
+    data.grid,
+    rng
   )
   const potionSpawns = generatePotionSpawns(
     data.rooms,
     startRoom,
     data.exitRoom,
     keyCell,
-    data.grid
+    data.grid,
+    rng
   )
+  const leverCell = pickLeverCell(
+    data.rooms,
+    startRoom,
+    data.exitRoom,
+    keyRoom,
+    treasureRoom,
+    data.grid,
+    rng
+  )
+  const treasureSpawn = treasureRoom
+    ? createTreasureSpawn(treasureRoom, startRoom.centerCell, data.grid, rng)
+    : null
 
   return {
     ...data,
@@ -36,6 +67,10 @@ export function createLevelState(): LevelState {
     enemySpawns,
     propSpawns,
     potionSpawns,
+    treasureSpawn,
+    leverCell,
+    leverActivated: false,
+    seed,
     discovered: createDiscoveryGrid(),
     hasKey: false,
     keyDiscovered: false,
@@ -62,7 +97,9 @@ export function nextLevel() {
 
 export function resetGame() {
   state.player.health = 100
+  state.player.shield = 0
   state.player.score = 0
+  state.inventory.held = null
   state.timers.lastShot = 0
   state.effects.hitmarkerTimer = 0
   state.effects.damageVignetteTimer = 0
@@ -75,6 +112,7 @@ export function resetGame() {
   levelState.hasKey = false
   levelState.keyDiscovered = false
   levelState.portalDiscovered = false
+  levelState.leverActivated = false
   levelState.discovered = createDiscoveryGrid()
   state.discovered = levelState.discovered
 
@@ -178,6 +216,141 @@ export function updatePotionPickup() {
   }
 }
 
+export function updateTreasurePickup() {
+  const camera = state.camera
+  const itemNotice = state.ui.itemNotice
+  if (!camera) return
+
+  for (let i = state.treasurePickups.length - 1; i >= 0; i -= 1) {
+    const pickup = state.treasurePickups[i]
+    const flatDistance = new THREE.Vector3()
+      .subVectors(camera.position, pickup.mesh.position)
+      .setY(0)
+      .length()
+    if (flatDistance < 1.2) {
+      if (state.inventory.held) {
+        if (itemNotice) {
+          itemNotice.textContent = 'Inventory full'
+          itemNotice.style.display = 'block'
+          setTimeout(() => {
+            if (itemNotice) itemNotice.style.display = 'none'
+          }, 1200)
+        }
+        continue
+      }
+      state.inventory.held = pickup.type
+      if (itemNotice) {
+        itemNotice.textContent = `Picked up: ${formatConsumableLabel(pickup.type)}`
+        itemNotice.style.display = 'block'
+        setTimeout(() => {
+          if (itemNotice) itemNotice.style.display = 'none'
+        }, 1400)
+      }
+      state.scene?.remove(pickup.mesh)
+      state.treasurePickups.splice(i, 1)
+    }
+  }
+}
+
+export function updateLeverInteraction() {
+  const levelState = state.levelState
+  const camera = state.camera
+  const lever = state.lever
+  const leverNotice = state.ui.leverNotice
+  if (!levelState || !camera || !lever || lever.isActivated) return
+
+  const distance = lever.mesh.position.distanceTo(camera.position)
+  if (distance < 1.3) {
+    levelState.leverActivated = true
+    lever.isActivated = true
+    if (leverNotice) {
+      leverNotice.textContent = 'Switch activated'
+      leverNotice.style.display = 'block'
+      setTimeout(() => {
+        if (leverNotice) leverNotice.style.display = 'none'
+      }, 1400)
+    }
+    state.scene?.remove(lever.mesh)
+    state.lever = null
+  }
+}
+
+export function updateDoorInteractions() {
+  const levelState = state.levelState
+  const camera = state.camera
+  const doorHint = state.ui.doorHint
+  if (!levelState || !camera) return
+
+  let showHint = false
+  for (let i = state.doors.length - 1; i >= 0; i -= 1) {
+    const door = state.doors[i]
+    const distance = door.mesh.position.distanceTo(camera.position)
+    if (distance > 2.4) continue
+
+    const isUnlocked = door.kind === 'exit' ? levelState.hasKey : levelState.leverActivated
+    if (!isUnlocked) {
+      if (doorHint && !showHint) {
+        doorHint.textContent =
+          door.kind === 'exit'
+            ? 'Door locked: find the key'
+            : 'Door locked: activate the switch'
+        doorHint.style.display = 'block'
+      }
+      showHint = true
+      continue
+    }
+
+    if (distance < 1.8) {
+      removeDoor(i)
+    }
+  }
+
+  if (!showHint && doorHint) doorHint.style.display = 'none'
+}
+
+export function useHeldItem() {
+  const held = state.inventory.held
+  const itemNotice = state.ui.itemNotice
+  if (!held) return
+
+  switch (held) {
+    case 'medkit':
+      state.player.health = Math.min(100, state.player.health + 40)
+      if (itemNotice) {
+        itemNotice.textContent = 'Medkit used: +40 HP'
+        itemNotice.style.display = 'block'
+        setTimeout(() => {
+          if (itemNotice) itemNotice.style.display = 'none'
+        }, 1200)
+      }
+      break
+    case 'shield':
+      state.player.shield = Math.min(100, state.player.shield + 40)
+      if (itemNotice) {
+        itemNotice.textContent = 'Shield activated'
+        itemNotice.style.display = 'block'
+        setTimeout(() => {
+          if (itemNotice) itemNotice.style.display = 'none'
+        }, 1200)
+      }
+      break
+    case 'scanner':
+      if (state.levelState) {
+        revealTreasureArea(state.levelState)
+      }
+      if (itemNotice) {
+        itemNotice.textContent = 'Scanner pulse'
+        itemNotice.style.display = 'block'
+        setTimeout(() => {
+          if (itemNotice) itemNotice.style.display = 'none'
+        }, 1200)
+      }
+      break
+  }
+
+  state.inventory.held = null
+}
+
 export function updateDiscovery() {
   const levelState = state.levelState
   const camera = state.camera
@@ -192,12 +365,7 @@ export function updateDiscovery() {
     }
   }
 
-  if (levelState.discovered[levelState.keyCell.y][levelState.keyCell.x]) {
-    levelState.keyDiscovered = true
-  }
-  if (levelState.discovered[levelState.exitRoom.centerCell.y][levelState.exitRoom.centerCell.x]) {
-    levelState.portalDiscovered = true
-  }
+  refreshDiscoveryFlags(levelState)
 }
 
 export function updateGameOver() {
@@ -268,14 +436,117 @@ export function spawnKeyMesh(cell: GridPoint) {
   state.keyMesh = mesh
 }
 
+function clearDoors() {
+  state.doors.forEach((door) => state.scene?.remove(door.mesh))
+  state.doors.length = 0
+  state.doorColliders.length = 0
+}
+
+function removeDoor(index: number) {
+  const door = state.doors[index]
+  state.scene?.remove(door.mesh)
+  state.doors.splice(index, 1)
+  state.doorColliders.splice(index, 1)
+}
+
+function spawnDoors(levelState: LevelState) {
+  clearDoors()
+  const exitEntrances = findRoomEntrances(levelState.exitRoom, levelState.grid)
+  exitEntrances.forEach((cell) => createDoor(cell, 'exit'))
+
+  const treasureRoom = levelState.rooms.find((room) => room.tag === 'treasure')
+  if (!treasureRoom) return
+  const treasureEntrances = findRoomEntrances(treasureRoom, levelState.grid)
+  treasureEntrances.forEach((cell) => createDoor(cell, 'treasure'))
+}
+
+function createDoor(cell: GridPoint, kind: DoorKind) {
+  const material = new THREE.MeshStandardMaterial({
+    color: kind === 'exit' ? 0x4fd4ff : 0xf5d76e,
+    emissive: kind === 'exit' ? 0x1a5d74 : 0x7c5b1a,
+    emissiveIntensity: 0.35,
+  })
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(config.cellSize, config.wallHeight, config.cellSize),
+    material
+  )
+  const worldPos = gridToWorld(cell.x, cell.y)
+  mesh.position.set(worldPos.x, config.wallHeight / 2, worldPos.z)
+  state.scene?.add(mesh)
+
+  const collider = {
+    minX: worldPos.x - config.cellSize / 2,
+    maxX: worldPos.x + config.cellSize / 2,
+    minZ: worldPos.z - config.cellSize / 2,
+    maxZ: worldPos.z + config.cellSize / 2,
+  }
+  state.doors.push({ mesh, collider, cell, kind, isLocked: true })
+  state.doorColliders.push(collider)
+}
+
+function clearLever() {
+  if (state.lever) {
+    state.scene?.remove(state.lever.mesh)
+  }
+  state.lever = null
+}
+
+function spawnLever(levelState: LevelState) {
+  clearLever()
+  if (levelState.leverActivated) return
+
+  const geometry = new THREE.CylinderGeometry(0.12, 0.2, 0.9, 10)
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x8bf7ff,
+    emissive: 0x1f6a75,
+    emissiveIntensity: 0.5,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  const worldPos = gridToWorld(levelState.leverCell.x, levelState.leverCell.y)
+  mesh.position.set(worldPos.x, 0.6, worldPos.z)
+  state.scene?.add(mesh)
+  state.lever = { mesh, cell: levelState.leverCell, isActivated: false }
+}
+
+function clearTreasurePickups() {
+  state.treasurePickups.forEach((pickup) => state.scene?.remove(pickup.mesh))
+  state.treasurePickups.length = 0
+}
+
+function spawnTreasurePickups(levelState: LevelState) {
+  clearTreasurePickups()
+  if (!levelState.treasureSpawn) return
+
+  const geometry = new THREE.OctahedronGeometry(0.35)
+  const material = new THREE.MeshStandardMaterial({
+    color: getTreasureColor(levelState.treasureSpawn.type),
+    emissive: getTreasureEmissive(levelState.treasureSpawn.type),
+    emissiveIntensity: 0.6,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  const worldPos = gridToWorld(
+    levelState.treasureSpawn.cell.x,
+    levelState.treasureSpawn.cell.y
+  )
+  mesh.position.set(worldPos.x, 1.1, worldPos.z)
+  state.scene?.add(mesh)
+  state.treasurePickups.push({
+    mesh,
+    cell: levelState.treasureSpawn.cell,
+    type: levelState.treasureSpawn.type,
+  })
+}
+
 export function refreshTorchLights(roomList: LevelData['rooms']) {
   state.torchLights.forEach((light) => state.scene?.remove(light))
   state.torchLights = []
   roomList.forEach((room, index) => {
     if (index % 2 === 0) {
-      const light = new THREE.PointLight(0xffb26a, 1.2, 16, 2)
+      const baseColor = getTorchColor(room.tag)
+      const baseIntensity = room.tag === 'treasure' ? 1.5 : room.tag === 'trap' ? 0.9 : 1.2
+      const light = new THREE.PointLight(baseColor, baseIntensity, 16, 2)
       light.position.set(room.centerX, 2.6, room.centerZ)
-      light.userData.baseIntensity = 1.1
+      light.userData.baseIntensity = baseIntensity
       state.torchLights.push(light)
       state.scene?.add(light)
     }
@@ -372,6 +643,9 @@ function applyLevelState(levelState: LevelState) {
 
   if (state.wallMesh) scene.remove(state.wallMesh)
   if (state.exitPortal) scene.remove(state.exitPortal)
+  clearDoors()
+  clearTreasurePickups()
+  clearLever()
   state.wallAabbs.length = 0
 
   const wallPositions: THREE.Matrix4[] = []
@@ -409,6 +683,9 @@ function applyLevelState(levelState: LevelState) {
   state.exitPortal = createExitPortal(levelState.exitRoom)
   scene.add(state.exitPortal)
   refreshTorchLights(levelState.rooms)
+  spawnDoors(levelState)
+  spawnLever(levelState)
+  spawnTreasurePickups(levelState)
 
   spawnProps(levelState.propSpawns)
   spawnPotions(levelState.potionSpawns)
@@ -419,28 +696,24 @@ function applyLevelState(levelState: LevelState) {
 
   if (state.ui.keyNotice) state.ui.keyNotice.style.display = 'none'
   if (state.ui.potionNotice) state.ui.potionNotice.style.display = 'none'
+  if (state.ui.itemNotice) state.ui.itemNotice.style.display = 'none'
+  if (state.ui.leverNotice) state.ui.leverNotice.style.display = 'none'
+  if (state.ui.doorHint) state.ui.doorHint.style.display = 'none'
 }
 
-function generateDungeon(width: number, height: number): LevelData {
+function generateDungeon(width: number, height: number, rng: Rng): LevelData {
   const grid = Array.from({ length: height }, () => Array(width).fill(1))
-  const rooms: {
-    x: number
-    y: number
-    w: number
-    h: number
-    centerX: number
-    centerZ: number
-    centerCell: GridPoint
-  }[] = []
+  const rooms: Room[] = []
 
   const maxRooms = 12
   const attempts = 40
+  let roomId = 0
 
   for (let i = 0; i < attempts && rooms.length < maxRooms; i += 1) {
-    const roomWidth = randRange(4, 8)
-    const roomHeight = randRange(4, 8)
-    const x = randRange(1, width - roomWidth - 2)
-    const y = randRange(1, height - roomHeight - 2)
+    const roomWidth = randRange(rng, 4, 8)
+    const roomHeight = randRange(rng, 4, 8)
+    const x = randRange(rng, 1, width - roomWidth - 2)
+    const y = randRange(rng, 1, height - roomHeight - 2)
 
     if (intersectsExistingRoom(grid, x, y, roomWidth, roomHeight)) continue
 
@@ -456,6 +729,7 @@ function generateDungeon(width: number, height: number): LevelData {
     }
     const centerWorld = gridToWorld(centerCell.x, centerCell.y)
     rooms.push({
+      id: roomId,
       x,
       y,
       w: roomWidth,
@@ -464,6 +738,7 @@ function generateDungeon(width: number, height: number): LevelData {
       centerZ: centerWorld.z,
       centerCell,
     })
+    roomId += 1
   }
 
   rooms.sort((a, b) => a.centerCell.x - b.centerCell.x)
@@ -471,7 +746,7 @@ function generateDungeon(width: number, height: number): LevelData {
   for (let i = 1; i < rooms.length; i += 1) {
     const prev = rooms[i - 1].centerCell
     const current = rooms[i].centerCell
-    carveCorridor(grid, prev, current)
+    carveCorridor(grid, prev, current, rng)
   }
 
   if (rooms.length === 0) {
@@ -492,11 +767,13 @@ function generateDungeon(width: number, height: number): LevelData {
     }
     const centerWorld = gridToWorld(centerCell.x, centerCell.y)
     rooms.push({
+      id: roomId,
       ...fallback,
       centerX: centerWorld.x,
       centerZ: centerWorld.z,
       centerCell,
     })
+    roomId += 1
   }
 
   const startRoom = rooms[0]
@@ -517,18 +794,16 @@ function pickKeyCell(
   roomList: LevelData['rooms'],
   start: LevelData['rooms'][number],
   exit: LevelData['rooms'][number],
-  gridSource: number[][]
+  gridSource: number[][],
+  rng: Rng
 ) {
   const candidates = roomList.filter((room) => room !== start && room !== exit)
   const farRooms = candidates.filter(
     (room) => manhattan(room.centerCell, start.centerCell) >= 8
   )
-  const keyRoom =
-    farRooms[Math.floor(Math.random() * farRooms.length)] ||
-    candidates[Math.floor(Math.random() * candidates.length)] ||
-    exit
+  const keyRoom = pickRandomRoom(farRooms, rng) ?? pickRandomRoom(candidates, rng) ?? exit
   return (
-    getRandomFloorCellInRoom(keyRoom, 4, start.centerCell, gridSource) ||
+    getRandomFloorCellInRoomWithRng(keyRoom, 4, start.centerCell, gridSource, rng) ||
     keyRoom.centerCell
   )
 }
@@ -537,7 +812,8 @@ function generateEnemySpawns(
   roomList: LevelData['rooms'],
   startCell: GridPoint,
   count: number,
-  gridSource: number[][]
+  gridSource: number[][],
+  rng: Rng
 ): SpawnInfo[] {
   const filteredRooms = roomList.filter(
     (room) => manhattan(room.centerCell, startCell) >= 10
@@ -551,10 +827,20 @@ function generateEnemySpawns(
   const rangedCount = Math.max(1, Math.round(count * 0.3))
   for (let i = 0; i < count && i < availableRooms.length; i += 1) {
     const room = availableRooms[i % availableRooms.length]
-    const cell = getRandomFloorCellInRoom(room, 8, startCell, gridSource)
+    const cell = getRandomFloorCellInRoomWithRng(room, 8, startCell, gridSource, rng)
     if (!cell) continue
     spawns.push({ cell, type: i < rangedCount ? 'ranged' : 'melee' })
   }
+
+  roomList
+    .filter((room) => room.tag === 'trap')
+    .forEach((room) => {
+      const cell = getRandomFloorCellInRoomWithRng(room, 4, startCell, gridSource, rng)
+      if (cell) {
+        spawns.push({ cell, type: 'melee' })
+      }
+    })
+
   return spawns
 }
 
@@ -562,7 +848,8 @@ function generatePropSpawns(
   roomList: LevelData['rooms'],
   start: LevelData['rooms'][number],
   exit: LevelData['rooms'][number],
-  gridSource: number[][]
+  gridSource: number[][],
+  rng: Rng
 ): SpawnInfo[] {
   const spawns: SpawnInfo[] = []
   const occupied = new Set<string>()
@@ -570,14 +857,16 @@ function generatePropSpawns(
 
   roomList.forEach((room) => {
     if (room === start || room === exit) return
-    const propCount = randRange(1, 3)
+    const baseMin = room.tag === 'armory' ? 2 : 1
+    const baseMax = room.tag === 'armory' ? 4 : 3
+    const propCount = randRange(rng, baseMin, baseMax)
     for (let i = 0; i < propCount; i += 1) {
-      const cell = getRandomFloorCellInRoom(room, 4, start.centerCell, gridSource)
+      const cell = getRandomFloorCellInRoomWithRng(room, 4, start.centerCell, gridSource, rng)
       if (!cell) continue
       const key = `${cell.x},${cell.y}`
       if (occupied.has(key)) continue
       occupied.add(key)
-      const type = types[Math.floor(Math.random() * types.length)]
+      const type = types[Math.floor(rng() * types.length)]
       spawns.push({ cell, type })
     }
   })
@@ -590,17 +879,17 @@ function generatePotionSpawns(
   start: LevelData['rooms'][number],
   exit: LevelData['rooms'][number],
   keyCell: GridPoint,
-  gridSource: number[][]
+  gridSource: number[][],
+  rng: Rng
 ): SpawnInfo[] {
   const spawns: SpawnInfo[] = []
   const occupied = new Set<string>([`${keyCell.x},${keyCell.y}`])
   const candidateRooms = roomList.filter((room) => room !== start && room !== exit)
 
-  const potionCount = randRange(2, 4)
+  const potionCount = randRange(rng, 2, 4)
   for (let i = 0; i < potionCount; i += 1) {
-    const room =
-      candidateRooms[Math.floor(Math.random() * candidateRooms.length)] || start
-    const cell = getRandomFloorCellInRoom(room, 4, start.centerCell, gridSource)
+    const room = pickRandomRoom(candidateRooms, rng) ?? start
+    const cell = getRandomFloorCellInRoomWithRng(room, 4, start.centerCell, gridSource, rng)
     if (!cell) continue
     const key = `${cell.x},${cell.y}`
     if (occupied.has(key)) continue
@@ -609,6 +898,266 @@ function generatePotionSpawns(
   }
 
   return spawns
+}
+
+type Rng = () => number
+
+function createRng(seed: number): Rng {
+  let t = seed >>> 0
+  return () => {
+    t += 0x6d2b79f5
+    let r = Math.imul(t ^ (t >>> 15), 1 | t)
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r)
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function randRange(rng: Rng, min: number, max: number) {
+  return Math.floor(rng() * (max - min + 1)) + min
+}
+
+function pickRandomRoom<T extends Room>(rooms: T[], rng: Rng) {
+  if (rooms.length === 0) return null
+  return rooms[Math.floor(rng() * rooms.length)]
+}
+
+function pickRoomFromTop(rooms: Room[], rng: Rng) {
+  if (rooms.length === 0) return null
+  const topCount = Math.max(1, Math.ceil(rooms.length * 0.5))
+  return rooms[Math.floor(rng() * topCount)]
+}
+
+function findRoomForCell(rooms: Room[], cell: GridPoint) {
+  return (
+    rooms.find(
+      (room) =>
+        cell.x >= room.x &&
+        cell.x < room.x + room.w &&
+        cell.y >= room.y &&
+        cell.y < room.y + room.h
+    ) ?? null
+  )
+}
+
+function assignRoomTags(
+  rooms: Room[],
+  start: Room,
+  exit: Room,
+  keyRoom: Room | null,
+  rng: Rng
+) {
+  rooms.forEach((room) => {
+    room.tag = undefined
+  })
+
+  const candidates = rooms.filter(
+    (room) => room !== start && room !== exit && room !== keyRoom
+  )
+  if (candidates.length === 0) return
+
+  const sorted = [...candidates].sort(
+    (a, b) =>
+      manhattan(b.centerCell, start.centerCell) - manhattan(a.centerCell, start.centerCell)
+  )
+
+  const treasureRoom = pickRoomFromTop(sorted, rng)
+  if (treasureRoom) treasureRoom.tag = 'treasure'
+
+  const remaining = sorted.filter((room) => room !== treasureRoom)
+  const trapRoom = pickRoomFromTop(remaining, rng)
+  if (trapRoom) trapRoom.tag = 'trap'
+
+  const armoryRoom = pickRoomFromTop(remaining.filter((room) => room !== trapRoom), rng)
+  if (armoryRoom) armoryRoom.tag = 'armory'
+}
+
+function pickLeverCell(
+  rooms: Room[],
+  start: Room,
+  exit: Room,
+  keyRoom: Room | null,
+  treasureRoom: Room | null,
+  gridSource: number[][],
+  rng: Rng
+) {
+  const candidates = rooms.filter(
+    (room) => room !== start && room !== exit && room !== keyRoom && room !== treasureRoom
+  )
+
+  let chosen = candidates[0] ?? treasureRoom ?? start
+  if (treasureRoom && candidates.length > 0) {
+    chosen = candidates.reduce((best, room) =>
+      manhattan(room.centerCell, treasureRoom.centerCell) >
+      manhattan(best.centerCell, treasureRoom.centerCell)
+        ? room
+        : best
+    )
+  } else if (candidates.length > 0) {
+    chosen = candidates[Math.floor(rng() * candidates.length)]
+  }
+
+  return (
+    getRandomFloorCellInRoomWithRng(chosen, 3, start.centerCell, gridSource, rng) ||
+    chosen.centerCell
+  )
+}
+
+function createTreasureSpawn(
+  room: Room,
+  referenceCell: GridPoint,
+  gridSource: number[][],
+  rng: Rng
+) {
+  const types: ConsumableType[] = ['medkit', 'shield', 'scanner']
+  const type = types[Math.floor(rng() * types.length)]
+  const cell =
+    getRandomFloorCellInRoomWithRng(room, 4, referenceCell, gridSource, rng) ||
+    room.centerCell
+  return { cell, type }
+}
+
+function getRandomFloorCellInRoomWithRng(
+  room: { x: number; y: number; w: number; h: number },
+  minDistanceFromCell: number,
+  referenceCell: GridPoint,
+  gridSource: number[][],
+  rng: Rng
+) {
+  let cell: GridPoint = { x: 1, y: 1 }
+  let attempts = 0
+  do {
+    cell = {
+      x: room.x + Math.floor(rng() * room.w),
+      y: room.y + Math.floor(rng() * room.h),
+    }
+    attempts += 1
+  } while (
+    (gridSource[cell.y][cell.x] !== 0 ||
+      manhattan(cell, referenceCell) < minDistanceFromCell) &&
+    attempts < 100
+  )
+  if (gridSource[cell.y][cell.x] === 0) return cell
+  return null
+}
+
+function findRoomEntrances(room: Room, gridSource: number[][]) {
+  const entrances: GridPoint[] = []
+  const seen = new Set<string>()
+  const minX = room.x
+  const maxX = room.x + room.w - 1
+  const minY = room.y
+  const maxY = room.y + room.h - 1
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      if (x !== minX && x !== maxX && y !== minY && y !== maxY) continue
+      if (gridSource[y]?.[x] !== 0) continue
+
+      const neighbors = [
+        { x: x - 1, y },
+        { x: x + 1, y },
+        { x, y: y - 1 },
+        { x, y: y + 1 },
+      ]
+
+      neighbors.forEach((neighbor) => {
+        if (
+          neighbor.x < minX ||
+          neighbor.x > maxX ||
+          neighbor.y < minY ||
+          neighbor.y > maxY
+        ) {
+          if (gridSource[neighbor.y]?.[neighbor.x] !== 0) return
+          const key = `${x},${y}`
+          if (seen.has(key)) return
+          entrances.push({ x, y })
+          seen.add(key)
+        }
+      })
+    }
+  }
+
+  return entrances
+}
+
+function revealTreasureArea(levelState: LevelState) {
+  const treasureRoom = levelState.rooms.find((room) => room.tag === 'treasure')
+  if (!treasureRoom) return
+
+  const minX = Math.max(0, treasureRoom.x - 1)
+  const maxX = Math.min(config.gridWidth - 1, treasureRoom.x + treasureRoom.w)
+  const minY = Math.max(0, treasureRoom.y - 1)
+  const maxY = Math.min(config.gridHeight - 1, treasureRoom.y + treasureRoom.h)
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      if (levelState.grid[y][x] !== 0) continue
+      levelState.discovered[y][x] = true
+    }
+  }
+
+  refreshDiscoveryFlags(levelState)
+}
+
+function refreshDiscoveryFlags(levelState: LevelState) {
+  if (levelState.discovered[levelState.keyCell.y][levelState.keyCell.x]) {
+    levelState.keyDiscovered = true
+  }
+  if (levelState.discovered[levelState.exitRoom.centerCell.y][levelState.exitRoom.centerCell.x]) {
+    levelState.portalDiscovered = true
+  }
+}
+
+function formatConsumableLabel(type: ConsumableType) {
+  switch (type) {
+    case 'medkit':
+      return 'Medkit'
+    case 'shield':
+      return 'Shield'
+    case 'scanner':
+      return 'Scanner'
+    default:
+      return 'Item'
+  }
+}
+
+function getTreasureColor(type: ConsumableType) {
+  switch (type) {
+    case 'medkit':
+      return 0x63ff9a
+    case 'shield':
+      return 0x63c7ff
+    case 'scanner':
+      return 0xd38cff
+    default:
+      return 0x9bd8ff
+  }
+}
+
+function getTreasureEmissive(type: ConsumableType) {
+  switch (type) {
+    case 'medkit':
+      return 0x2a8f5a
+    case 'shield':
+      return 0x1f5f88
+    case 'scanner':
+      return 0x5f2a88
+    default:
+      return 0x35648c
+  }
+}
+
+function getTorchColor(tag?: RoomTag) {
+  switch (tag) {
+    case 'treasure':
+      return 0x78d6ff
+    case 'trap':
+      return 0xff6b5b
+    case 'armory':
+      return 0xffc36e
+    default:
+      return 0xffb26a
+  }
 }
 
 function intersectsExistingRoom(
@@ -626,8 +1175,8 @@ function intersectsExistingRoom(
   return false
 }
 
-function carveCorridor(grid: number[][], from: GridPoint, to: GridPoint) {
-  const horizontalFirst = Math.random() > 0.5
+function carveCorridor(grid: number[][], from: GridPoint, to: GridPoint, rng: Rng) {
+  const horizontalFirst = rng() > 0.5
   if (horizontalFirst) {
     carveLine(grid, from.x, from.y, to.x, from.y)
     carveLine(grid, to.x, from.y, to.x, to.y)
@@ -650,6 +1199,3 @@ function carveLine(grid: number[][], x1: number, y1: number, x2: number, y2: num
   }
 }
 
-function randRange(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min
-}
